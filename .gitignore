@@ -5,3 +5,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 Therapeutic_class_counts-fXyUUS.xlsx
+frontend/node_modules/
+frontend/.next/
+~$*.xlsx
+*.xlsx
+.env
+.venv/
