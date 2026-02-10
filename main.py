@@ -1,0 +1,117 @@
+
+import os
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
+import chromadb
+from chromadb.utils import embedding_functions
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+app = FastAPI(title="PharmaGPT & Symptom Matcher")
+
+# Configuration
+CHROMA_PATH = 'd:/python/RAG/chroma_db'
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+MODEL_NAME = os.getenv("NVIDIA_MODEL_NAME", "nvidia/nemotron-3-nano-30b-a3b:free")
+
+# Initialize ChromaDB
+client = chromadb.PersistentClient(path=CHROMA_PATH)
+emb_func = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+collection = client.get_or_create_collection(name="medicines", embedding_function=emb_func)
+
+# Initialize OpenAI SDK for OpenRouter
+ai_client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+)
+
+class Query(BaseModel):
+    text: str
+    top_k: int = 3
+
+class MedicineResponse(BaseModel):
+    name: str
+    benefits: str
+    side_effects: str
+    safety_advice: str
+    relevance_score: float
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[dict]] = []
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to PharmaGPT API"}
+
+@app.post("/search", response_model=List[MedicineResponse])
+async def search_symptoms(query: Query):
+    """Search for medicines based on symptoms or benefits."""
+    try:
+        results = collection.query(
+            query_texts=[query.text],
+            n_results=query.top_k
+        )
+        
+        responses = []
+        for i in range(len(results['ids'][0])):
+            metadata = results['metadatas'][0][i]
+            responses.append(MedicineResponse(
+                name=metadata.get('name', 'N/A'),
+                benefits=results['documents'][0][i].split("Benefits: ")[1].split("\n")[0] if "Benefits: " in results['documents'][0][i] else "N/A",
+                side_effects=metadata.get('side_effects', 'N/A'),
+                safety_advice=metadata.get('safety_advice', 'N/A'),
+                relevance_score=results['distances'][0][i]
+            ))
+        return responses
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat")
+async def chat_rag(request: ChatRequest):
+    """Conversational RAG for specific medicine queries."""
+    try:
+        # 1. Retrieve context
+        search_results = collection.query(
+            query_texts=[request.message],
+            n_results=2
+        )
+        
+        context = "\n---\n".join(search_results['documents'][0])
+        
+        # 2. Build Prompt
+        system_prompt = (
+            "You are PharmaGPT, a professional medical assistant. Use the following context to answer the user's question. "
+            "If the information is not in the context, say you don't know based on the current database. "
+            "ALWAYS include safety warnings if applicable. "
+            "DISCLAIMER: State that this is not medical advice.\n\n"
+            f"Context:\n{context}"
+        )
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        if request.history:
+            messages.extend(request.history)
+        messages.append({"role": "user", "content": request.message})
+        
+        # 3. Call NVIDIA Nemotron via OpenRouter
+        response = ai_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=1024
+        )
+        
+        return {
+            "answer": response.choices[0].message.content,
+            "sources": search_results['metadatas'][0]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

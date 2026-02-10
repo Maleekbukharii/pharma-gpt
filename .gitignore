@@ -1,0 +1,7 @@
+.env
+MID.xlsx
+chroma_db/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+Therapeutic_class_counts-fXyUUS.xlsx
