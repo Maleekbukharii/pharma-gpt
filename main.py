@@ -39,17 +39,6 @@ ai_client = OpenAI(
     api_key=OPENROUTER_API_KEY,
 )
 
-class Query(BaseModel):
-    text: str
-    top_k: int = 3
-
-class MedicineResponse(BaseModel):
-    name: str
-    benefits: str
-    side_effects: str
-    safety_advice: str
-    relevance_score: float
-
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[dict]] = []
@@ -57,29 +46,6 @@ class ChatRequest(BaseModel):
 @app.get("/")
 async def root():
     return {"message": "Welcome to PharmaGPT API"}
-
-@app.post("/search", response_model=List[MedicineResponse])
-async def search_symptoms(query: Query):
-    """Search for medicines based on symptoms or benefits."""
-    try:
-        results = collection.query(
-            query_texts=[query.text],
-            n_results=query.top_k
-        )
-        
-        responses = []
-        for i in range(len(results['ids'][0])):
-            metadata = results['metadatas'][0][i]
-            responses.append(MedicineResponse(
-                name=metadata.get('name', 'N/A'),
-                benefits=results['documents'][0][i].split("Benefits: ")[1].split("\n")[0] if "Benefits: " in results['documents'][0][i] else "N/A",
-                side_effects=metadata.get('side_effects', 'N/A'),
-                safety_advice=metadata.get('safety_advice', 'N/A'),
-                relevance_score=results['distances'][0][i]
-            ))
-        return responses
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
 async def chat_rag(request: ChatRequest):
@@ -98,6 +64,7 @@ async def chat_rag(request: ChatRequest):
             "You are PharmaGPT, a professional medical assistant. Use the following context to answer the user's question. "
             "If the information is not in the context, say you don't know based on the current database. "
             "ALWAYS include safety warnings if applicable. "
+            "Format your response in composed Markdown, using tables, bullet points, and bold text where appropriate. "
             "DISCLAIMER: State that this is not medical advice.\n\n"
             f"Context:\n{context}"
         )
